@@ -1,0 +1,47 @@
+server:
+  port: 8080
+  read_timeout: 15s
+  write_timeout: 15s
+
+redis:
+  addr: localhost:6379
+  password: ""
+  db: 0
+
+services:
+  analysis:
+    url: http://localhost:8081
+    timeout: 30s
+  visualization:
+    url: http://localhost:8082
+    timeout: 30s
+  collaboration:
+    url: http://localhost:8083
+    timeout: 30s
+  metrics:
+    url: http://localhost:8084
+    timeout: 30s
+
+auth:
+  jwt_secret: "your-secret-key-change-in-production"
+  token_duration: 24h
+
+rate_limit:
+  requests_per_second: 100
+  burst: 200
+
+cors:
+  allowed_origins:
+    - "http://localhost:3000"
+    - "http://localhost:5173"
+  allowed_methods:
+    - GET
+    - POST
+    - PUT
+    - DELETE
+    - OPTIONS
+  allowed_headers:
+    - Authorization
+    - Content-Type
+    - X-Request-ID
+  max_age: 86400
