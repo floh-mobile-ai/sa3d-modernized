@@ -37,9 +37,9 @@ WORKDIR /app
 # Copy binary from builder
 COPY --from=builder /app/main .
 
-# Copy config if exists
-ARG SERVICE_NAME
-COPY --from=builder /app/services/${SERVICE_NAME}/config ./config
+# Skip config copy for now - services don't have config directories
+# ARG SERVICE_NAME
+# COPY --from=builder /app/services/${SERVICE_NAME}/config ./config
 
 # Change ownership
 RUN chown -R appuser:appgroup /app
