@@ -81,6 +81,12 @@ services:
       - "${API_GATEWAY_PORT:-8080}:8080"
     environment:
       GATEWAY_SERVER_PORT: 8080
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-sa3d}
+      DB_PASSWORD: ${DB_PASSWORD:?Database password is required}
+      DB_NAME: ${DB_NAME:-sa3d_db}
+      DB_SSL_MODE: ${DB_SSL_MODE:-disable}
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
@@ -91,8 +97,12 @@ services:
       GATEWAY_SERVICES_COLLABORATION_URL: http://collaboration-service:8080
       GATEWAY_SERVICES_METRICS_URL: http://metrics-service:8080
     depends_on:
-      - redis
-      - analysis-service
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      analysis-service:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
       interval: 30s
