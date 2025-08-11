@@ -15,12 +15,13 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/time/rate"
 
 	"github.com/sa3d-modernized/sa3d/services/api-gateway/internal/handler"
 	"github.com/sa3d-modernized/sa3d/services/api-gateway/internal/middleware"
 	"github.com/sa3d-modernized/sa3d/services/api-gateway/internal/proxy"
+	"github.com/sa3d-modernized/sa3d/shared/services"
+	"github.com/sa3d-modernized/sa3d/shared/utils"
 )
 
 type Config struct {
@@ -79,17 +80,26 @@ func main() {
 	logger.SetFormatter(&logrus.JSONFormatter{})
 	logger.SetLevel(logrus.InfoLevel)
 
-	// Load configuration
-	config, err := loadConfig()
+	// Initialize secrets manager
+	secretManager := utils.NewSecretManager(logger)
+
+	// Load configuration with secure secrets
+	config, err := loadConfig(secretManager)
 	if err != nil {
 		logger.Fatalf("Failed to load configuration: %v", err)
 	}
 
+	// Get Redis credentials securely
+	redisAddr, redisPassword, redisDB, err := secretManager.GetRedisCredentials()
+	if err != nil {
+		logger.Fatalf("Failed to get Redis credentials: %v", err)
+	}
+
 	// Initialize Redis client
 	redisClient := redis.NewClient(&redis.Options{
-		Addr:     config.Redis.Addr,
-		Password: config.Redis.Password,
-		DB:       config.Redis.DB,
+		Addr:     redisAddr,
+		Password: redisPassword,
+		DB:       redisDB,
 	})
 
 	ctx := context.Background()
@@ -121,12 +131,22 @@ func main() {
 	router.Use(middleware.RateLimiter(limiter))
 	router.Use(middleware.Tracing(tracer))
 
+	// Initialize database service
+	dbService, err := services.NewDatabaseService(secretManager, logger)
+	if err != nil {
+		logger.Fatalf("Failed to initialize database service: %v", err)
+	}
+	defer dbService.Close()
+
+	// Initialize authentication service
+	authService := services.NewAuthService(dbService, logger)
+
 	// Initialize handlers
-	authHandler := handler.NewAuthHandler(redisClient, config.Auth.JWTSecret, config.Auth.TokenDuration, logger)
+	authHandler := handler.NewProductionAuthHandler(authService, logger)
 	healthHandler := handler.NewHealthHandler(serviceProxies, logger)
 
 	// Setup routes
-	setupRoutes(router, authHandler, healthHandler, serviceProxies, config, logger)
+	setupRoutes(router, authHandler, healthHandler, serviceProxies, authService, config, logger)
 
 	// Metrics endpoint
 	router.GET("/metrics", gin.WrapH(promhttp.Handler()))
@@ -165,7 +185,7 @@ func main() {
 	logger.Info("Server exited")
 }
 
-func loadConfig() (*Config, error) {
+func loadConfig(secretManager *utils.SecretManager) (*Config, error) {
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
 	viper.AddConfigPath(".")
@@ -176,8 +196,6 @@ func loadConfig() (*Config, error) {
 	viper.SetDefault("server.port", "8080")
 	viper.SetDefault("server.read_timeout", "15s")
 	viper.SetDefault("server.write_timeout", "15s")
-	viper.SetDefault("redis.addr", "localhost:6379")
-	viper.SetDefault("redis.db", 0)
 	viper.SetDefault("rate_limit.requests_per_second", 100)
 	viper.SetDefault("rate_limit.burst", 200)
 	viper.SetDefault("cors.max_age", 86400)
@@ -186,7 +204,7 @@ func loadConfig() (*Config, error) {
 	viper.SetEnvPrefix("GATEWAY")
 	viper.AutomaticEnv()
 
-	// Read config file
+	// Read config file (if it exists)
 	if err := viper.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
 			return nil, err
@@ -198,9 +216,16 @@ func loadConfig() (*Config, error) {
 		return nil, err
 	}
 
-	// Validate required fields
-	if config.Auth.JWTSecret == "" {
-		return nil, fmt.Errorf("JWT secret is required")
+	// Get JWT secret securely
+	jwtSecret, err := secretManager.GetJWTSecret()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get JWT secret: %w", err)
+	}
+	config.Auth.JWTSecret = jwtSecret
+
+	// Set default token duration if not specified
+	if config.Auth.TokenDuration == 0 {
+		config.Auth.TokenDuration = 24 * time.Hour
 	}
 
 	return &config, nil
@@ -254,9 +279,10 @@ func initializeServiceProxies(config *Config, logger *logrus.Logger) map[string]
 
 func setupRoutes(
 	router *gin.Engine,
-	authHandler *handler.AuthHandler,
+	authHandler *handler.ProductionAuthHandler,
 	healthHandler *handler.HealthHandler,
 	serviceProxies map[string]*proxy.ServiceProxy,
+	authService *services.AuthService,
 	config *Config,
 	logger *logrus.Logger,
 ) {
@@ -265,18 +291,27 @@ func setupRoutes(
 	router.GET("/health/ready", healthHandler.Ready)
 	router.GET("/health/live", healthHandler.Live)
 
-	// Auth routes
+	// Auth routes (public)
 	auth := router.Group("/api/v1/auth")
 	{
+		auth.POST("/register", authHandler.Register)
 		auth.POST("/login", authHandler.Login)
-		auth.POST("/logout", authHandler.Logout)
 		auth.POST("/refresh", authHandler.RefreshToken)
 		auth.GET("/validate", authHandler.ValidateToken)
 	}
 
+	// Protected auth routes
+	authProtected := router.Group("/api/v1/auth")
+	authProtected.Use(middleware.ProductionAuth(authService, logger))
+	{
+		authProtected.POST("/logout", authHandler.Logout)
+		authProtected.GET("/profile", authHandler.GetProfile)
+		authProtected.POST("/change-password", authHandler.ChangePassword)
+	}
+
 	// API routes with authentication
 	api := router.Group("/api/v1")
-	api.Use(middleware.Auth(config.Auth.JWTSecret))
+	api.Use(middleware.ProductionAuth(authService, logger))
 	{
 		// Analysis routes
 		if analysisProxy, ok := serviceProxies["analysis"]; ok {
@@ -338,7 +373,7 @@ func setupRoutes(
 	}
 
 	// WebSocket endpoint for real-time updates
-	router.GET("/ws", middleware.Auth(config.Auth.JWTSecret), createWebSocketHandler(serviceProxies, logger))
+	router.GET("/ws", middleware.ProductionAuth(authService, logger), createWebSocketHandler(serviceProxies, logger))
 }
 
 func createProxyHandler(serviceProxy *proxy.ServiceProxy, method, path string) gin.HandlerFunc {
