@@ -10,8 +10,8 @@ DO $$
 BEGIN
     IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'sa3d_app') THEN
         CREATE ROLE sa3d_app WITH LOGIN PASSWORD NULL;
-        -- Password will be set via environment variable
-        ALTER ROLE sa3d_app WITH PASSWORD :'sa3d_app_password';
+        -- Password will be set via environment variable  
+        ALTER ROLE sa3d_app WITH PASSWORD 'sa3d_app_password';
     END IF;
 END
 $$;
