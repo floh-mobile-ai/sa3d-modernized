@@ -5,30 +5,49 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: sa3d
-      POSTGRES_PASSWORD: sa3d_password
-      POSTGRES_DB: sa3d_db
+      POSTGRES_USER: ${DB_USER:-sa3d}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Database password is required}
+      POSTGRES_DB: ${DB_NAME:-sa3d_db}
+      POSTGRES_INITDB_ARGS: "--auth-local=scram-sha-256 --auth-host=scram-sha-256"
     ports:
-      - "5432:5432"
+      - "${DB_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-postgres.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U sa3d"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-sa3d}"]
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - sa3d-internal
 
   redis:
     image: redis:7-alpine
+    command: redis-server --requirepass ${REDIS_PASSWORD:-""} --appendonly yes
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD:-}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - sa3d-internal
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+    networks:
+      - sa3d-kafka
 
   kafka:
     image: confluentinc/cp-kafka:latest
@@ -43,16 +62,8 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
     volumes:
       - kafka_data:/var/lib/kafka/data
-
-  zookeeper:
-    image: confluentinc/cp-zookeeper:latest
-    ports:
-      - "2181:2181"
-    environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-      ZOOKEEPER_TICK_TIME: 2000
-    volumes:
-      - zookeeper_data:/var/lib/zookeeper/data
+    networks:
+      - sa3d-kafka
 
   # Application services
   api-gateway:
@@ -62,11 +73,14 @@ services:
       args:
         SERVICE_NAME: api-gateway
     ports:
-      - "8080:8080"
+      - "${API_GATEWAY_PORT:-8080}:8080"
     environment:
-      GATEWAY_SERVER_PORT: 8080
-      GATEWAY_REDIS_ADDR: redis:6379
-      GATEWAY_AUTH_JWT_SECRET: ${JWT_SECRET:-development-secret-change-in-production}
+      GATEWAY_SERVER_PORT: ${API_GATEWAY_PORT:-8080}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_DB: ${REDIS_DB:-0}
+      JWT_SECRET: ${JWT_SECRET:?JWT secret is required for security}
       GATEWAY_SERVICES_ANALYSIS_URL: http://analysis-service:8080
       GATEWAY_SERVICES_VISUALIZATION_URL: http://visualization-service:8080
       GATEWAY_SERVICES_COLLABORATION_URL: http://collaboration-service:8080
@@ -79,6 +93,8 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+    networks:
+      - sa3d-internal
 
   analysis-service:
     build:
@@ -87,16 +103,20 @@ services:
       args:
         SERVICE_NAME: analysis
     ports:
-      - "8081:8080"
+      - "${ANALYSIS_SERVICE_PORT:-8081}:8080"
     environment:
-      ANALYSIS_SERVER_PORT: 8080
-      ANALYSIS_DATABASE_HOST: postgres
-      ANALYSIS_DATABASE_PORT: 5432
-      ANALYSIS_DATABASE_USER: sa3d
-      ANALYSIS_DATABASE_PASSWORD: sa3d_password
-      ANALYSIS_DATABASE_NAME: sa3d_db
-      ANALYSIS_REDIS_ADDR: redis:6379
-      ANALYSIS_KAFKA_BROKERS: kafka:9092
+      ANALYSIS_SERVER_PORT: ${ANALYSIS_SERVICE_PORT:-8080}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-sa3d}
+      DB_PASSWORD: ${DB_PASSWORD:?Database password is required}
+      DB_NAME: ${DB_NAME:-sa3d_db}
+      DB_SSL_MODE: ${DB_SSL_MODE:-require}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_DB: ${REDIS_DB:-0}
+      KAFKA_BROKERS: kafka:9092
     depends_on:
       - postgres
       - redis
@@ -106,6 +126,9 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+    networks:
+      - sa3d-internal
+      - sa3d-kafka
 
   # Frontend (to be added)
   # frontend:
@@ -118,6 +141,14 @@ services:
   #     REACT_APP_API_URL: http://localhost:8080
   #   depends_on:
   #     - api-gateway
+
+networks:
+  sa3d-internal:
+    driver: bridge
+    name: sa3d-internal
+  sa3d-kafka:
+    driver: bridge
+    name: sa3d-kafka
 
 volumes:
   postgres_data:
