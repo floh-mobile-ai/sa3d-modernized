@@ -62,3 +62,4 @@ coverage/
 
 # Documentation build
 docs/_build/
+.claude/settings.local.json
