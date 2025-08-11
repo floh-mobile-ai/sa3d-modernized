@@ -26,15 +26,33 @@ func (b *BaseModel) BeforeCreate(tx *gorm.DB) error {
 // User represents a user in the system
 type User struct {
 	BaseModel
-	Email     string    `json:"email" gorm:"uniqueIndex;not null"`
-	Username  string    `json:"username" gorm:"uniqueIndex;not null"`
-	Password  string    `json:"-" gorm:"not null"`
-	FirstName string    `json:"first_name"`
-	LastName  string    `json:"last_name"`
-	Role      string    `json:"role" gorm:"default:'user'"`
-	IsActive  bool      `json:"is_active" gorm:"default:true"`
-	LastLogin time.Time `json:"last_login,omitempty"`
-	Projects  []Project `json:"projects,omitempty" gorm:"many2many:user_projects;"`
+	Email                string     `json:"email" gorm:"uniqueIndex;not null"`
+	Username             string     `json:"username" gorm:"uniqueIndex;not null"`
+	Password             string     `json:"-" gorm:"not null"`
+	FirstName            string     `json:"first_name"`
+	LastName             string     `json:"last_name"`
+	Role                 string     `json:"role" gorm:"default:'user'"`
+	IsActive             bool       `json:"is_active" gorm:"default:true"`
+	IsVerified           bool       `json:"is_verified" gorm:"default:false"`
+	FailedLoginAttempts  int        `json:"failed_login_attempts" gorm:"default:0"`
+	LockedUntil          *time.Time `json:"locked_until,omitempty"`
+	LastLogin            *time.Time `json:"last_login,omitempty"`
+	PasswordChangedAt    time.Time  `json:"password_changed_at"`
+	Projects             []Project  `json:"projects,omitempty" gorm:"many2many:user_projects;"`
+	Sessions             []UserSession `json:"sessions,omitempty"`
+}
+
+// UserSession represents a user authentication session
+type UserSession struct {
+	BaseModel
+	UserID       uuid.UUID `json:"user_id" gorm:"not null;index"`
+	User         *User     `json:"user,omitempty" gorm:"foreignKey:UserID"`
+	SessionToken string    `json:"session_token" gorm:"uniqueIndex;not null"`
+	RefreshToken string    `json:"refresh_token" gorm:"uniqueIndex"`
+	ExpiresAt    time.Time `json:"expires_at" gorm:"not null;index"`
+	IPAddress    string    `json:"ip_address"`
+	UserAgent    string    `json:"user_agent"`
+	IsActive     bool      `json:"is_active" gorm:"default:true;index"`
 }
 
 // Project represents a software project

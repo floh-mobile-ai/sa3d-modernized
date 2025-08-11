@@ -44,6 +44,11 @@ func ValidatePassword(password string) error {
 	return nil
 }
 
+// IsValidPassword returns true if password meets strength requirements
+func IsValidPassword(password string) bool {
+	return ValidatePassword(password) == nil
+}
+
 // SanitizeString removes potentially harmful characters from a string
 func SanitizeString(input string) string {
 	// Remove null bytes
